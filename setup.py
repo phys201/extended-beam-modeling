@@ -21,5 +21,7 @@ setup(name='xbmodeling',
       install_requires=[
           '',
       ],
+      test_suite='nose.collector',
+      tests_require=['nose'],
       zip_safe=False)
 

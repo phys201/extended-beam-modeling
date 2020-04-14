@@ -6,3 +6,11 @@
 
 # Python egg metadata, regenerated from source files by setuptools.
 /*.egg-info
+
+# Pycharm metadata
+.idea
+__pycache__
+
+# Jupyter Notebook data
+.ipynb_checkpoints
+
