@@ -1,26 +1,35 @@
 from .config import modelconf
+import healpy as hp
+import scipy
+
+def make_cmb_ground_map(filename):
+    # Load CMB Map
+    cmbmap = hp.read_map(filename, field=None, nest=False)
+
+    # Determine where ground should be and set to a constant temperature.
+    # T = modelconf["T"]
+
+    return cmbmap
+
+def make_beam_map(self, params):
+
+
+    return# beammap
+
+
+
+def convolve_maps(cmbmap,beammap):
+
+    return
 
 class GenModelMap:
-    def __init__(self, params):
-        self.params = params
+    def __init__(self, beamparams=modelconf["BeamParams"]):
+        self.params = beamparams
 
-        self.beam_map = make_beam_map(params)
-
+        self.main_beam_map = make_beam_map(*beamparams)
+        self.cmbmap = make_cmb_ground_map(modelconf["cmbFile"])
         return
 
-    def make_beam_map(self,params):
-
-        return
-
-    def make_cmb_ground_map(self, filename=modelconf["cmbFile"]):
-
-        # Load CMB Map
-        # cmbmap = load_cmb_map
-        # Determine where ground should be and set to a constant temperature.
-        #T = modelconf["T"]
-
-        #self.cmbmap = cmbmap
-        return
 
     def regen_model(self):
         '''
@@ -37,4 +46,8 @@ class GenModelMap:
         :param data:
         :return:
         '''
+
+        # Extract detector timestream by interpolating map with az/el timesteams
+
+
         return simdata
