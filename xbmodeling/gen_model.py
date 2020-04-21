@@ -21,7 +21,7 @@ def make_cmb_map(filename, nside_out=modelconf["defaultResolution"]):
     return cmbmap
 
 
-def make_ground_tempplate(T=modelconf["groundTemperature"],nside=modelconf["defaultResolution"]):
+def make_ground_template(T=modelconf["groundTemperature"],nside=modelconf["defaultResolution"]):
     groundmap = np.zeros(hp.nside2npix(nside))
     if type(T) == type(None):
         return groundmap
@@ -85,6 +85,12 @@ def convolve_maps(cmbmap, beammap):
     conv_map = hp.smoothing(cmbmap, beam_window=Bl/np.max(Bl))
     return conv_map
 
+def beam_map_pointing_model(az,el,dk,r,theta,pol,mount):
+    # Returns the apparent azimuth, elevation, and boresight rotation
+    # of a given detector with pointing r, theta WRT to the boresight.
+
+
+
 
 class GenModelMap:
     def __init__(
@@ -112,7 +118,7 @@ class GenModelMap:
         )
 
         # Add the ground template
-        self.groundmap = make_ground_tempplate(T=self.T, nside=self.nside)
+        self.groundmap = make_ground_template(T=self.T, nside=self.nside)
 
         # Initialize the CMB map
         self.cmbmap = make_cmb_map(cmb_file, nside_out=self.nside)
