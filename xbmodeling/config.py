@@ -7,11 +7,11 @@
 
 # Values for the generative model
 modelconf = {
-    "cmbFile": "xbmodeling/inputmaps/COM_CMB_IQU-143-fgsub-sevem-field-Pol_1024_R2.01_full.fits",  # Default CMB map
+    "cmbFile": "xbmodeling/inputmaps/commanderR300_full_IQU_NSIDE_512.fits",  # Default CMB map
     "groundTemperature": 300,  # Default ground temperature
     "beamParams": [1, 0, 30, 30, 30, 1],
     "extendedBeam": [0.25, 120, 120, 60, 60, 0],
-    "defaultResolution": 128,
+    "defaultResolution": 125,
 }
 
 # "BeamParams" : io.load_beam_params()
@@ -61,4 +61,3 @@ mountconf["B3"] = {
     "eloffx": 0.0,  # in meters
     "eloffz" : 0.0, # in meters
 }
-

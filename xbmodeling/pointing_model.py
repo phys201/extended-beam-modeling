@@ -1,7 +1,8 @@
 import numpy as np
 import numbers
 from functools import reduce
-from .config import mountconf
+from xbmodeling.config import mountconf
+
 
 '''
 Note: A lot of this code is based-on or directly copied from some of my previous
@@ -81,7 +82,8 @@ Y = vec3(0., 1., 0.)
 Z = vec3(0., 0., 1.)
 ORG = vec3(0., 0., 0.)  # Origin
 
-def beam_pointing_model(az, el, dk, r, theta,pol=0, mntstr="keck"):
+
+def beam_pointing_model(az, el, dk, r, theta, pol=0, mntstr="keck"):
     mnt = mountconf[mntstr]
     # Start at the origin of a cartesian coordinate system
     # pos = origin, direction = Zhat, orientation = Xhat
@@ -92,20 +94,23 @@ def beam_pointing_model(az, el, dk, r, theta,pol=0, mntstr="keck"):
     # Do an additional rotation to reflect the detector pointing
     detdir, detpol, detort, detort2 = detector_transform(mountdir, mountort, r, theta, pol)
 
-    return get_apparent_topocoords(detdir, detpol)
+    # Get the apparent azimuth, elevation, and parallactic angle:
+    az_app, el_app, parall_angle = get_apparent_topocoords(detdir, detpol)
+
+    return az_app, el_app, parall_angle
 
 
 def get_apparent_topocoords(detdir, detpol):
     az_app = np.arctan2(detdir.dot(Y) * -1, detdir.dot(X)) * 180 / np.pi
-    el_app = np.arcsin(detdir.dot(Z))*180/np.pi
+    el_app = np.arcsin(detdir.dot(Z)) * 180 / np.pi
 
     # Calculate the parallactic angle of the the detector polarization
     # with respect to zenith
     ea = Z.cross(detdir).norm()
     eb = detdir.cross(ea)
-    parall_angle = np.arctan2(detpol.dot(eb), detpol.dot(ea))*180/np.pi
+    parall_angle = np.arctan2(detpol.dot(eb), detpol.dot(ea)) * 180 / np.pi
 
-    return az_app%(360.), el_app%(360.), parall_angle%(360.)
+    return az_app % (360.), el_app % (360.), parall_angle % (360.)
 
 
 def mount_transform(pos, dir, ort, az, el, dk, mnt):
@@ -121,8 +126,8 @@ def mount_transform(pos, dir, ort, az, el, dk, mnt):
     outpos = outpos + vec3(0., 0., mnt["eloffz"])
     outpos = outpos.rotate(Z, -az)
 
-    outdir = outdir.rotate(Z, dk + mnt["drumangle"] - 90).rotate(Y,90 - el).rotate(Z, -az)
-    outort = outort.rotate(Z, dk + mnt["drumangle"] - 90).rotate(Y,90 - el).rotate(Z, -az)
+    outdir = outdir.rotate(Z, dk + mnt["drumangle"] - 90).rotate(Y, 90 - el).rotate(Z, -az)
+    outort = outort.rotate(Z, dk + mnt["drumangle"] - 90).rotate(Y, 90 - el).rotate(Z, -az)
     return outpos, outdir, outort
 
 
