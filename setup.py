@@ -19,7 +19,8 @@ setup(name='xbmodeling',
       license='Gnu GPL v3',
       packages=['xbmodeling'],
       install_requires=[
-          '',
+          'numpy',
+          'healpy', 'numexpr'
       ],
       test_suite='nose.collector',
       tests_require=['nose'],
