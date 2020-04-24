@@ -20,7 +20,10 @@ setup(name='xbmodeling',
       packages=['xbmodeling'],
       install_requires=[
           'numpy',
-          'healpy', 'numexpr'
+          'healpy',
+          'numexpr',
+          'h5py',
+          'pandas',
       ],
       test_suite='nose.collector',
       tests_require=['nose'],
