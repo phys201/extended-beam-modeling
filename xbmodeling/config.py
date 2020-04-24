@@ -12,6 +12,7 @@ modelconf = {
     "beamParams": [1, 0, 30, 30, 30, 1],
     "extendedBeam": [0.25, 120, 120, 60, 60, 0],
     "defaultResolution": 125,
+    "defaultData": "xbmodeling/input_data/bicepkeck_tods/20150531C01_dk068_tod_singlepair.mat",
 }
 
 # "BeamParams" : io.load_beam_params()
@@ -41,6 +42,8 @@ mountconf["keck"] = {
     "dkoffy" : 0.0, # in meters
     "eloffx" : 0.0, # in meters
     "eloffz" : 1.1750, # in meters
+    "sitelat":-89.932,
+    "sitelon": 350.9
 }
 
 
@@ -60,4 +63,7 @@ mountconf["B3"] = {
     "dkoffy": 0.0,  # in meters
     "eloffx": 0.0,  # in meters
     "eloffz" : 0.0, # in meters
+    "sitelat":-89.932, # In degrees
+    "sitelon": 350.9 # In degrees
+
 }
