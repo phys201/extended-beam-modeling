@@ -11,6 +11,7 @@ modelconf = {
     "groundTemperature": 300,  # Default ground temperature
     "beamParams": [1, 0, 30, 30, 30, 1],
     "extendedBeam": [0.25, 120, 120, 60, 60, 0],
+    "extendedOption": "main",
     "defaultResolution": 128,
     "defaultData": "xbmodeling/input_data/bicepkeck_tods/20150531C01_dk068_tod_singlepair.mat",
 }

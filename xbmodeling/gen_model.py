@@ -124,6 +124,7 @@ class GenModelMap:
             ext_beam_params=None,
     ):
 
+        self.cmb_file = cmb_file
         self.main_beam_params_A = main_beam_params_A
         self.main_beam_params_B = main_beam_params_B
         self.ext_beam_params = ext_beam_params
@@ -165,13 +166,13 @@ class GenModelMap:
         '''
 
         # If any parameter set is changed. Change the object attribute.
-        if type(mainA) != type(None):
+        if not isinstance(extended,type(None)):
             self.main_beam_params_A = mainA
 
-        if type(mainB) != type(None):
+        if not isinstance(mainB,type(None)):
             self.main_beam_params_B = mainB
 
-        if type(extended) != type(None):
+        if not isinstance(extended,type(None)):
             self.ext_beam_params = extended
 
         self.maps["beammapA"] = make_composite_map(self.main_beam_params_A, self.ext_beam_params, nside=self.nside)
@@ -179,6 +180,7 @@ class GenModelMap:
 
         # Initialize the CMB map
         if type(cmb_file) != type(None):
+            self.cmb_file = cmb_file
             cmbmap = make_cmb_map(cmb_file, nside_out=self.nside)
             cmbmap = np.array(g2c(cmbmap))
             self.maps["cmbmapT"] = cmbmap[0, :]
@@ -200,10 +202,36 @@ class GenModelMap:
         else:
             self.maps = convolve_maps(self.maps, doconv=False)
 
-        return self
+        #return self
 
-    def observe(self, tod, det_info, mntstr="B3", showplot=False, doloop=False):
-        # MAPO Site location: 314°12'36.7''E, 89°59'35.4''S (Source: JPL Horizons)
+    def observe(self,
+                tod,
+                det_info,
+                mainA=None,
+                mainB=None,
+                extended=None,
+                cmb_file=None,
+                T=None,
+                extendedopt=modelconf["extendedOption"],
+                mntstr="B3",
+                showplot=False):
+
+        if not isinstance(extended, type(None)) and not extendedopt=="custom":
+            x = 2 * np.sin(det_info["r"].values[0] / 2) * np.cos(det_info["theta"].values[0]) * 180.0 / np.pi
+            y = 2 * np.sin(det_info["r"].values[0] / 2) * np.sin(det_info["theta"].values[0]) * 180.0 / np.pi
+            if extendedopt == "main":
+                extended[1:3] = [0, 0]
+            elif extendedopt == "boresight":
+                extended[1:3] = [-x, -y]
+            elif extendedopt == "buddy":
+                extended[1:3] = [-2 * x, -2 * y]
+            else:
+                raise NameError("Extended Beam Option: " + extendedopt + " not found.")
+
+        # Check to see if the input parameters are the same as the parameters we already have.
+        # If they are, we've already done a convolution, so don't do another one.
+        if self.check_change(mainA=mainA, mainB=mainB, extended=extended, cmb_file=cmb_file, T=T):
+            self.regen_model(mainA=mainA, mainB=mainB, extended=extended, cmb_file=cmb_file, T=T)
 
         # Initialize variables
         samples = len(tod.index)
@@ -241,6 +269,30 @@ class GenModelMap:
                 return 0
         hp.graticule()
         return 1
+
+    def check_change(self,mainA=None, mainB=None, extended=None, cmb_file=None, T=None):
+        # If any parameter set is changed. Change the object attribute.
+        checkchange = [True]
+
+        # Check the beammap values
+        if not isinstance(extended, type(None)):
+            checkchange.append((self.main_beam_params_A == mainA))
+
+        if not isinstance(mainB, type(None)):
+            checkchange.append((self.main_beam_params_B == mainB))
+
+        if not isinstance(extended, type(None)):
+            checkchange.append((self.ext_beam_params == extended))
+        # Check the CMB map file
+        if not isinstance(cmb_file, type(None)):
+            checkchange.append((self.cmb_file == cmb_file))
+
+        # check the ground template
+        if not isinstance(type(T), type(None)):
+            checkchange.append((self.T == T))
+
+        return not any(checkchange)
+
 
     # This doesn't use any convolutions to return timestreams. Extremely outdate and slow.
     # Don't use.
