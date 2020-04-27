@@ -3,6 +3,7 @@ import xbmodeling as xb
 import xbmodeling.gen_model as gm
 from xbmodeling.config import modelconf
 import healpy as hp
+import pandas as pd
 
 class TestSomethingGeneric(TestCase):
     def test_upper(self):
@@ -56,4 +57,30 @@ class TestGenModel(TestCase):
         peak_1 = hp.get_interp_val(beammap_1,0,0)
         peak_2 = hp.get_interp_val(beammap_2,0,0)
         self.assertTrue(peak_2 > peak_1)
+        
+    def test_convolution(self):
+        # CMB map
+        filename = modelconf['cmbFile']
+        Nside = 64
+        cmb_map_to_test = gm.make_cmb_map(filename, nside_out=Nside)
+        # Ground 
+        groundmap_test = gm.make_ground_template(T=301, nside=Nside)
+        # Beam map
+        params_main = [1, 0, 0, 0.1, 0.1, 1]
+        params_ext = [0.05, 3, 3, 1, 1, 0]
+        beammap_A = gm.make_composite_map(params_main, params_ext, nside=Nside)
+        beammap_B = gm.make_composite_map(params_main, params_ext, nside=Nside)
+        # Put them in ddataframe that convolve_maps likes
+        maps = pd.DataFrame({
+            "beammapA": beammap_A,
+            "beammapB": beammap_B,
+            "groundmap": groundmap_test,
+            "cmbmapT": cmb_map_to_test[0, :],
+            "cmbmapQ": cmb_map_to_test[1, :],
+            "cmbmapU": cmb_map_to_test[2, :],
+        })
+        # Convolve
+        maps = gm.convolve_maps(maps)
+        self.assertEqual(len(maps["convmapT"]), len(maps["cmbmapT"]))
+        
         
