@@ -10,7 +10,6 @@ from xbmodeling.pointing_model import *
 from xbmodeling.azel2radec import *
 
 
-
 def make_cmb_map(filename, nside_out=modelconf["defaultResolution"]):
     # Load CMB Map
     cmbmap = hp.read_map(filename, field=None, nest=False)
@@ -201,7 +200,9 @@ class GenModelMap:
         else:
             self.maps = convolve_maps(self.maps, doconv=False)
 
-    def observe(self, tod, det_info, mntstr="B3", showplot=False):
+        return self
+
+    def observe(self, tod, det_info, mntstr="B3", showplot=False, doloop=False):
         # MAPO Site location: 314°12'36.7''E, 89°59'35.4''S (Source: JPL Horizons)
 
         # Initialize variables
@@ -209,32 +210,25 @@ class GenModelMap:
         # From data, output the on-sky pointing of the detector
         tod_pointing = beam_pointing_model(tod, det_info, mntstr)
 
-        Z = np.zeros(hp.nside2npix(self.nside))
-        simdata = np.zeros(samples) + np.nan
-        # Slow loop
-        for dataind in np.arange(samples):
-            rai, deci, pari = tod_pointing[["app_ra_0", "app_dec_0", "pa_0"]].iloc[dataind].values
+        ipix = hp.pixelfunc.ang2pix(self.nside,
+                                    tod_pointing["app_ra_0"].values,
+                                    tod_pointing["app_dec_0"].values,
+                                    lonlat=True)
 
-            # vec = hp.ang2vec(rai * 180 / np.pi, deci * 180 / np.pi, lonlat=True)
-            # ipix_disc = hp.query_disc(nside=self.nside, vec=vec, radius=np.radians(1e-3), inclusive=True)
+        mapind = self.maps.iloc[ipix]
 
-            ipix = hp.pixelfunc.ang2pix(self.nside, rai, deci, lonlat=True)
-
-            mapind = self.maps.iloc[ipix]
-
-            simdata[dataind] = mapind["convmapT"] + \
-                               mapind["convmapQ"] * np.cos(2 * np.deg2rad(pari)) + \
-                               mapind["convmapQ"] * np.cos(2 * np.deg2rad(pari))
-
-            Z[ipix] = 300
-
-        tod["simdata"] = simdata
+        tod_pointing["simdata"] = (mapind["convmapT"].values +
+                                   mapind["convmapQ"].values * np.cos(2 * np.deg2rad(tod_pointing["pa_0"].values)) +
+                                   mapind["convmapU"].values * np.sin(2 * np.deg2rad(tod_pointing["pa_0"].values))) * \
+                                  det_info["ukpervolt"].values[0] * 1e6
 
         if showplot:
-            hp.mollview(self.maps["convmapT"].values + Z, )
+            Z = np.zeros(hp.nside2npix(self.nside))
+            Z[ipix] = 300
+            hp.mollview(self.maps["convmapT"].values + Z, coord="C", norm="hist")
             hp.graticule()
 
-        return tod
+        return tod_pointing
 
     def plot(self, mapstr, coord="C", norm="hist", **kwargs):
         if mapstr == 'all':
