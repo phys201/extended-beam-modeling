@@ -3,7 +3,7 @@ import numbers
 from functools import reduce
 from xbmodeling.config import mountconf
 import pandas as pd
-from xbmodeling.azel2radec import *
+from xbmodeling.azel2radec import azel2radec
 
 '''
 Note: A lot of this code is based-on or directly copied from some of my previous
