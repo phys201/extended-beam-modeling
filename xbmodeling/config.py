@@ -3,8 +3,6 @@
 # shop so we don't have to make a bunch of changes
 # in the code if we want to change these values
 
-# import io
-
 # Values for the generative model
 modelconf = {
     "cmbFile": "xbmodeling/inputmaps/commanderR300_full_IQU_NSIDE_512.fits",  # Default CMB map
