@@ -1,14 +1,15 @@
 # External dependencies
+import os
+import sys
+from contextlib import contextmanager
+
+import healpy as hp
 import numpy as np
 import pandas as pd
-import time
-import healpy as hp
 
 # Local dependencies
-from xbmodeling.config import *
-from xbmodeling.pointing_model import *
-from xbmodeling.azel2radec import *
-
+from xbmodeling.config import modelconf
+from xbmodeling.pointing_model import beam_pointing_model
 
 
 def make_cmb_map(filename, nside_out=modelconf["defaultResolution"]):
@@ -85,33 +86,46 @@ def convolve_maps(maps, doconv=True):
     # Convolve sky with beams using healpy's smoothing function.
     # Convert beammaps into window functions using anafast
 
-    if doconv:
-        # Temperature map has both CMB and ground
-        maps["convmapT"] = hp.smoothing(
-            (maps["cmbmapT"] + maps["groundmap"]).values,
-            beam_window=hp.anafast((maps["beammapA"] - maps["beammapB"]).values)
-        )
+    # Suppress healpy output
+    with suppress_stdout():
+        if doconv:
+            # Temperature map has both CMB and ground
+            maps["convmapT"] = hp.smoothing(
+                (maps["cmbmapT"] + maps["groundmap"]).values,
+                beam_window=hp.anafast((maps["beammapA"] - maps["beammapB"]).values)
+            )
 
-        # Polarization maps only have CMB
-        maps["convmapQ"] = hp.smoothing(
-            maps["cmbmapQ"].values,
-            beam_window=hp.anafast((maps["beammapA"] + maps["beammapB"]).values)
-        )
+            # Polarization maps only have CMB
+            maps["convmapQ"] = hp.smoothing(
+                maps["cmbmapQ"].values,
+                beam_window=hp.anafast((maps["beammapA"] + maps["beammapB"]).values)
+            )
 
-        maps["convmapU"] = hp.smoothing(
-            maps["cmbmapU"].values,
-            beam_window=hp.anafast((maps["beammapA"] + maps["beammapB"]).values)
-        )
+            maps["convmapU"] = hp.smoothing(
+                maps["cmbmapU"].values,
+                beam_window=hp.anafast((maps["beammapA"] + maps["beammapB"]).values)
+            )
 
-    else:
-        maps["convmapT"] = maps["cmbmapT"]
-        maps["convmapQ"] = maps["cmbmapQ"]
-        maps["convmapU"] = maps["cmbmapU"]
+        else:
+            maps["convmapT"] = maps["cmbmapT"]
+            maps["convmapQ"] = maps["cmbmapQ"]
+            maps["convmapU"] = maps["cmbmapU"]
 
     return maps
 
 
 g2c = hp.Rotator(coord=['G', 'C']).rotate_map_pixel
+
+
+@contextmanager
+def suppress_stdout():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 
 class GenModelMap:
@@ -125,6 +139,7 @@ class GenModelMap:
             ext_beam_params=None,
     ):
 
+        self.cmb_file = cmb_file
         self.main_beam_params_A = main_beam_params_A
         self.main_beam_params_B = main_beam_params_B
         self.ext_beam_params = ext_beam_params
@@ -166,13 +181,13 @@ class GenModelMap:
         '''
 
         # If any parameter set is changed. Change the object attribute.
-        if type(mainA) != type(None):
+        if not isinstance(mainA, type(None)):
             self.main_beam_params_A = mainA
 
-        if type(mainB) != type(None):
+        if not isinstance(mainB, type(None)):
             self.main_beam_params_B = mainB
 
-        if type(extended) != type(None):
+        if not isinstance(extended, type(None)):
             self.ext_beam_params = extended
 
         self.maps["beammapA"] = make_composite_map(self.main_beam_params_A, self.ext_beam_params, nside=self.nside)
@@ -180,6 +195,7 @@ class GenModelMap:
 
         # Initialize the CMB map
         if type(cmb_file) != type(None):
+            self.cmb_file = cmb_file
             cmbmap = make_cmb_map(cmb_file, nside_out=self.nside)
             cmbmap = np.array(g2c(cmbmap))
             self.maps["cmbmapT"] = cmbmap[0, :]
@@ -201,40 +217,61 @@ class GenModelMap:
         else:
             self.maps = convolve_maps(self.maps, doconv=False)
 
-    def observe(self, tod, det_info, mntstr="B3", showplot=False):
-        # MAPO Site location: 314°12'36.7''E, 89°59'35.4''S (Source: JPL Horizons)
+        # return self
+
+    def observe(self,
+                tod,
+                det_info,
+                mainA=None,
+                mainB=None,
+                extended=None,
+                cmb_file=None,
+                T=None,
+                extendedopt=modelconf["extendedOption"],
+                mntstr="B3",
+                showplot=False):
+
+        if not isinstance(extended, type(None)) and not extendedopt == "custom":
+            x = 2 * np.sin(det_info["r"].values[0] / 2) * np.cos(det_info["theta"].values[0]) * 180.0 / np.pi
+            y = 2 * np.sin(det_info["r"].values[0] / 2) * np.sin(det_info["theta"].values[0]) * 180.0 / np.pi
+            if extendedopt == "main":
+                extended[1:3] = [0, 0]
+            elif extendedopt == "boresight":
+                extended[1:3] = [-x, -y]
+            elif extendedopt == "buddy":
+                extended[1:3] = [-2 * x, -2 * y]
+            else:
+                raise NameError("Extended Beam Option: " + extendedopt + " not found.")
+
+        # Check to see if the input parameters are the same as the parameters we already have.
+        # If they are, we've already done a convolution, so don't do another one.
+        if self.check_change(mainA=mainA, mainB=mainB, extended=extended, cmb_file=cmb_file, T=T):
+            self.regen_model(mainA=mainA, mainB=mainB, extended=extended, cmb_file=cmb_file, T=T)
 
         # Initialize variables
         samples = len(tod.index)
         # From data, output the on-sky pointing of the detector
         tod_pointing = beam_pointing_model(tod, det_info, mntstr)
 
-        Z = np.zeros(hp.nside2npix(self.nside))
-        simdata = np.zeros(samples) + np.nan
-        # Slow loop
-        for dataind in np.arange(samples):
-            rai, deci, pari = tod_pointing[["app_ra_0", "app_dec_0", "pa_0"]].iloc[dataind].values
+        ipix = hp.pixelfunc.ang2pix(self.nside,
+                                    tod_pointing["app_ra_0"].values,
+                                    tod_pointing["app_dec_0"].values,
+                                    lonlat=True)
 
-            # vec = hp.ang2vec(rai * 180 / np.pi, deci * 180 / np.pi, lonlat=True)
-            # ipix_disc = hp.query_disc(nside=self.nside, vec=vec, radius=np.radians(1e-3), inclusive=True)
+        mapind = self.maps.iloc[ipix]
 
-            ipix = hp.pixelfunc.ang2pix(self.nside, rai, deci, lonlat=True)
-
-            mapind = self.maps.iloc[ipix]
-
-            simdata[dataind] = mapind["convmapT"] + \
-                               mapind["convmapQ"] * np.cos(2 * np.deg2rad(pari)) + \
-                               mapind["convmapQ"] * np.cos(2 * np.deg2rad(pari))
-
-            Z[ipix] = 300
-
-        tod["simdata"] = simdata
+        tod_pointing["simdata"] = (mapind["convmapT"].values +
+                                   mapind["convmapQ"].values * np.cos(2 * np.deg2rad(tod_pointing["pa_0"].values)) +
+                                   mapind["convmapU"].values * np.sin(2 * np.deg2rad(tod_pointing["pa_0"].values))) * \
+                                  det_info["ukpervolt"].values[0] * 1e6
 
         if showplot:
-            hp.mollview(self.maps["convmapT"].values + Z, )
+            Z = np.zeros(hp.nside2npix(self.nside))
+            Z[ipix] = 300
+            hp.mollview(self.maps["convmapT"].values + Z, coord="C", norm="hist")
             hp.graticule()
 
-        return tod
+        return tod_pointing
 
     def plot(self, mapstr, coord="C", norm="hist", **kwargs):
         if mapstr == 'all':
@@ -248,49 +285,25 @@ class GenModelMap:
         hp.graticule()
         return 1
 
-    # This doesn't use any convolutions to return timestreams. Extremely outdate and slow.
-    # Don't use.
-    def observe_nonconv(self, tod, det_info, mntstr="B3", showplot=False):
-        # MAPO Site location: 314°12'36.7''E, 89°59'35.4''S (Source: JPL Horizons)
+    def check_change(self, mainA=None, mainB=None, extended=None, cmb_file=None, T=None):
+        # If any parameter set is changed. Change the object attribute.
+        checkchange = []
 
-        # Initialize variables
-        samples = np.size(tod["tel_hor_az"])
-        r = 0
-        theta = 0
-        pol = 0
-        rad = np.deg2rad
-        deg = np.rad2deg
-        detlist = ['A', 'B']
+        # Check the beammap values
+        if not isinstance(mainA, type(None)):
+            checkchange.append((self.main_beam_params_A != mainA))
 
-        # From data, output the on-sky pointing of the detector
-        tod_pointing = beam_pointing_model(tod, det_info, mntstr)
+        if not isinstance(mainB, type(None)):
+            checkchange.append((self.main_beam_params_B != mainB))
 
-        # Our maps are in ra and dec. Derotate the cmbmaps by apparent ra and dec,
-        # then multiply by the beam and integrate.
-        # Z = np.zeros(hp.nside2npix(self.nside))
-        simdata = pd.DataFrame(index=tod.index)
-        # Slow loop
-        for detind in range(len(det_info.index)):
-            simname = "sim_" + detlist[detind] + "_sig"
-            detdata = np.zeros(len(tod.index))
-            for dataind in np.arange(samples):
-                sti = str(detind)
-                rai, deci, pari = tod_pointing[["app_ra_" + sti, "app_dec_" + sti, "pa_" + sti]].iloc[dataind].values
+        if not isinstance(extended, type(None)):
+            checkchange.append((self.ext_beam_params != extended))
+        # Check the CMB map file
+        if not isinstance(cmb_file, type(None)):
+            checkchange.append((self.cmb_file != cmb_file))
 
-                # Derotate
-                R = hp.rotator.Rotator([-rai, -deci], coord='C').rotate_map_pixel
+        # check the ground template
+        if not isinstance(T, type(None)):
+            checkchange.append((self.T != T))
 
-                # vec = hp.ang2vec(0, -90, lonlat=True)
-                # ipix_disc = hp.query_disc(nside=self.nside, vec=vec, radius=rad(1e-5), inclusive=True)
-                # ipix_disc = 0
-                detdata[dataind] = np.sum((R(self.maps["cmbmapT"] +
-                                             self.maps["cmbmapQ"] * np.cos(2 * rad(pari)) +
-                                             self.maps["cmbmapU"] * np.sin(2 * rad(pari))) *
-                                           self.maps["beammap" + detlist[detind]]))
-
-            simdata[simname] = detdata
-
-        # if showplot:
-        #    hp.mollview(self.convmap + Z)
-
-        return pd.concat([simdata, tod_pointing], axis=1)
+        return any(checkchange)
