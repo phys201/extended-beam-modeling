@@ -34,12 +34,12 @@ def make_cmb_map(
         shape(N,2) assumes Q/U map, and shape(N,3) assumes I,Q,U)
     """
 
-
     # Load CMB Map
     cmbmap = hp.read_map(filename, field=None, nest=False)
 
     if nside_out != hp.npix2nside(np.shape(cmbmap)[1]):
-        print("Current map NSIDE={0}. Converting to NSIDE={1}".format(hp.npix2nside(np.shape(cmbmap)[1]), nside_out))
+        print("Current map NSIDE={0}. Converting to NSIDE={1}".format(
+            hp.npix2nside(np.shape(cmbmap)[1]), nside_out))
         cmbmap = hp.pixelfunc.ud_grade(cmbmap, nside_out)
 
     return cmbmap
@@ -78,8 +78,10 @@ def make_ground_template(
 
     theta, phi = hp.pixelfunc.lonlat2thetaphi(0, 90)
 
-    ipix_disc = hp.query_disc(nside=hp.npix2nside(np.shape(groundmap)[0]), vec=hp.ang2vec(theta, phi),
-                              radius=np.radians(90))
+    ipix_disc = hp.query_disc(
+        nside=hp.npix2nside(np.shape(groundmap)[0]),
+        vec=hp.ang2vec(theta, phi),
+        radius=np.radians(90))
     groundmap[ipix_disc] = T
 
     return groundmap
@@ -105,7 +107,7 @@ def make_beam_map(params=None, nside=modelconf["defaultResolution"]):
     """
 
     # Allow a None value for params to return a delta function
-    if isinstance(params, type(None)):
+    if isnone(params):
         # params = [1,0,0,1e-5,1e-5,1]
         beammap = np.zeros(hp.nside2npix(nside))
         beammap[0] = 1
@@ -117,13 +119,17 @@ def make_beam_map(params=None, nside=modelconf["defaultResolution"]):
     y = 2 * np.sin(theta / 2) * np.sin(phi) * 180.0 / np.pi
 
     ang = params[5] * np.pi
-    a = np.cos(ang) ** 2 / 2 / params[3] + np.sin(ang) ** 2 / 2 / params[4]
+    a = np.cos(ang) ** 2 / 2 / params[3] + np.sin(ang) ** 2 / 2 / \
+        params[4]
     b = np.sin(2 * ang) / 4 * (1 / params[4] - 1 / params[3])
-    c = np.sin(ang) ** 2 / 2 / params[3] + np.cos(ang) ** 2 / 2 / params[4]
+    c = np.sin(ang) ** 2 / 2 / params[3] + np.cos(ang) ** 2 / 2 / \
+        params[4]
 
     # make a two-dimensional gaussian
     beammap = params[0] * np.exp(
-        -1 * (a * (x - params[1]) ** 2 + c * (y - params[2]) ** 2 + 2 * b * (x - params[1]) * (y - params[2])))
+        -1 * (a * (x - params[1]) ** 2 + c * (
+                    y - params[2]) ** 2 + 2 * b * (x - params[1]) * (
+                          y - params[2])))
     return beammap
 
 
@@ -150,9 +156,15 @@ def make_composite_map(
     beammap : ndarray shape(N,)
         2-D Gaussian in Healpix coordinates
     """
+
+    # extended beam should be offset relative to the main beam.
+    if not isnone([main, extended]):
+        extended[1] += main[1]
+        extended[2] += main[2]
+
     bm = make_beam_map(main, nside=nside) \
          + make_beam_map(extended, nside=nside)
-    return bm / np.sum(bm)
+    return bm / np.max(bm)
 
 
 def convolve_maps(maps, doconv=True):
@@ -177,27 +189,29 @@ def convolve_maps(maps, doconv=True):
         Returns maps data with extra "convmap[T,Q,U]" maps.
     """
 
+    pairsum = (maps["beammapA"] + maps["beammapB"]).values
+    pairsum /= np.sum(pairsum)
+    pairdiff = (maps["beammapA"] + maps["beammapB"]).values
+    pairdiff /= np.sum(pairdiff)
+
     # Suppress healpy output
     with suppress_stdout():
         if doconv:
             # Temperature map has both CMB and ground
             maps["convmapT"] = hp.smoothing(
                 (maps["cmbmapT"] + maps["groundmap"]).values,
-                beam_window=hp.anafast((maps["beammapA"]
-                                        - maps["beammapB"]).values)
+                beam_window=hp.anafast(pairdiff)
             )
 
             # Polarization maps only have CMB
             maps["convmapQ"] = hp.smoothing(
                 maps["cmbmapQ"].values,
-                beam_window=hp.anafast((maps["beammapA"]
-                                        + maps["beammapB"]).values)
+                beam_window=hp.anafast(pairsum)
             )
 
             maps["convmapU"] = hp.smoothing(
                 maps["cmbmapU"].values,
-                beam_window=hp.anafast((maps["beammapA"]
-                                        + maps["beammapB"]).values)
+                beam_window=hp.anafast(pairsum)
             )
 
         else:
@@ -206,6 +220,25 @@ def convolve_maps(maps, doconv=True):
             maps["convmapU"] = maps["cmbmapU"]
 
     return maps
+
+
+def isnone(obj):
+    """
+    Determines if objects are None. Useful for comparing things that
+    can be None or iterables.
+
+    Parameters
+    ----------
+    obj : object or list of objects
+
+    Returns
+    -------
+    bool
+    """
+    if not isinstance(obj, list):
+        obj = [obj]
+
+    return any([isinstance(x, type(None)) for x in obj])
 
 
 g2c = hp.Rotator(coord=['G', 'C']).rotate_map_pixel
@@ -245,6 +278,13 @@ class GenModelMap:
 
     Parameters
     ----------
+    tod : Pandas DataFrame
+            Real detector timestreams with telescope pointing
+            information
+    det_info : Pandas DataFrame
+        Detector information
+    mntstr : str, optional
+            Mount information to be retrieved from the config file
     cmb_file : str, optional
         Path and filename designating cmb map fits file.
     T : int or double, optional
@@ -269,8 +309,12 @@ class GenModelMap:
 
 
     """
+
     def __init__(
             self,
+            tod,
+            det_info,
+            mntstr="keck",
             cmb_file=modelconf["cmbFile"],
             T=modelconf["groundTemperature"],
             nside=modelconf["defaultResolution"],
@@ -279,6 +323,7 @@ class GenModelMap:
             ext_beam_params=None,
     ):
 
+        self.det_info = det_info
         self.cmb_file = cmb_file
         self.main_beam_params_A = main_beam_params_A
         self.main_beam_params_B = main_beam_params_B
@@ -293,9 +338,14 @@ class GenModelMap:
 
         # Keep each maps separated
         self.maps = pd.DataFrame({
-            "beammapA": make_composite_map(main_beam_params_A, ext_beam_params, nside=self.nside),
-            "beammapB": make_composite_map(main_beam_params_B, ext_beam_params, nside=self.nside),
-            "groundmap": make_ground_template(T=self.T, nside=self.nside),
+            "beammapA": make_composite_map(main_beam_params_A,
+                                           ext_beam_params,
+                                           nside=self.nside),
+            "beammapB": make_composite_map(main_beam_params_B,
+                                           ext_beam_params,
+                                           nside=self.nside),
+            "groundmap": make_ground_template(T=self.T,
+                                              nside=self.nside),
             "cmbmapT": cmbmap[0, :],
             "cmbmapQ": cmbmap[1, :],
             "cmbmapU": cmbmap[2, :],
@@ -304,14 +354,27 @@ class GenModelMap:
         # Convolve the beam maps and CMB maps
         # Are we simply initializing the model? If so, don't do the convolutions
         # just make the conv maps the CMB maps
-        if any([not isinstance(obj, type(None)) for obj in [self.main_beam_params_A,
-                                                            self.main_beam_params_B,
-                                                            self.ext_beam_params]]):
+        if not isnone([self.main_beam_params_A,
+                   self.main_beam_params_B,
+                   self.ext_beam_params]):
             self.maps = convolve_maps(self.maps)
         else:
             self.maps = convolve_maps(self.maps, doconv=False)
 
-        self.maplist = list(self.maps.keys())
+        # From data, output the on-sky pointing of the detector
+        self.tod_pointing = beam_pointing_model(tod, det_info, mntstr)
+
+        self.ipix = hp.pixelfunc.ang2pix(
+            self.nside,
+            self.tod_pointing["app_ra_0"].values,
+            self.tod_pointing["app_dec_0"].values,
+            lonlat=True
+        )
+
+        # Make a map of the detector pointing
+        coveragemap = np.zeros(hp.nside2npix(self.nside))
+        coveragemap[self.ipix] = 1
+        self.maps["coveragemap"] = coveragemap
 
     def regen_model(
             self,
@@ -339,20 +402,24 @@ class GenModelMap:
         """
 
         # If any parameter set is changed. Change the object attribute.
-        if not isinstance(mainA, type(None)):
+        if not isnone(mainA):
             self.main_beam_params_A = mainA
 
-        if not isinstance(mainB, type(None)):
+        if not isnone(mainB):
             self.main_beam_params_B = mainB
 
-        if not isinstance(extended, type(None)):
+        if not isnone(extended):
             self.ext_beam_params = extended
 
-        self.maps["beammapA"] = make_composite_map(self.main_beam_params_A, self.ext_beam_params, nside=self.nside)
-        self.maps["beammapB"] = make_composite_map(self.main_beam_params_B, self.ext_beam_params, nside=self.nside)
+        self.maps["beammapA"] = make_composite_map(
+            self.main_beam_params_A, self.ext_beam_params,
+            nside=self.nside)
+        self.maps["beammapB"] = make_composite_map(
+            self.main_beam_params_B, self.ext_beam_params,
+            nside=self.nside)
 
         # Initialize the CMB map
-        if type(cmb_file) != type(None):
+        if not isnone(cmb_file):
             self.cmb_file = cmb_file
             cmbmap = make_cmb_map(cmb_file, nside_out=self.nside)
             cmbmap = np.array(g2c(cmbmap))
@@ -361,33 +428,30 @@ class GenModelMap:
             self.maps["cmbmapU"] = cmbmap[2, :]
 
         # Add the ground template
-        if type(T) != type(None):
+        if not isnone(T):
             self.T = T
-            self.maps["groundmap"] = (make_ground_template(T=self.T, nside=self.nside))
+            self.maps["groundmap"] = (
+                make_ground_template(T=self.T, nside=self.nside))
 
         # Convolve the beam map and CMB map
         # Are we simply initializing the model? If so, don't do the convolutions
         # just make the conv maps the CMB maps
-        if any([not isinstance(obj, type(None)) for obj in [self.main_beam_params_A,
-                                                            self.main_beam_params_B,
-                                                            self.ext_beam_params]]):
+        if not isnone([self.main_beam_params_A,
+                   self.main_beam_params_B,
+                   self.ext_beam_params]):
             self.maps = convolve_maps(self.maps)
         else:
             self.maps = convolve_maps(self.maps, doconv=False)
 
-        # return self
+        return self
 
     def observe(self,
-                tod,
-                det_info,
                 mainA=None,
                 mainB=None,
                 extended=None,
                 cmb_file=None,
                 T=None,
-                extendedopt=modelconf["extendedOption"],
-                mntstr="keck",
-                showplot=False):
+                extendedopt=modelconf["extendedOption"]):
 
         """
 
@@ -396,11 +460,6 @@ class GenModelMap:
 
         Parameters
         ----------
-        tod : Pandas DataFrame
-            Real detector timestreams with telescope pointing
-            information
-        det_info : Pandas DataFrame
-            Detector information
         mainA,mainB,extended : list or ndarray shape (6,), optional
             Parameters which describe a two-dimensional Gaussian. Returns a
             2D pencil beam (delta function) by default.
@@ -411,8 +470,6 @@ class GenModelMap:
         extendedopt : str, {"main", "buddy", "boresight", "custom"}
             Optional. Determines where our extended be would be
             located.
-        mntstr : str, optional
-            Mount information to be retrieved from the config file
         showplot bool, optional
             Show where one the convmapT the telescope was pointing.
             Useful for troubleshooting the conversion from telescope
@@ -425,13 +482,13 @@ class GenModelMap:
             column.
         """
 
-        if not isinstance(extended, type(None)) \
+        if not isnone(extended) \
                 and not extendedopt == "custom":
-            x = 2 * np.sin(det_info["r"].values[0] / 2) \
-                * np.cos(det_info["theta"].values[0]) \
+            x = 2 * np.sin(self.det_info["r"].values[0] / 2) \
+                * np.cos(self.det_info["theta"].values[0]) \
                 * 180.0 / np.pi
-            y = 2 * np.sin(det_info["r"].values[0] / 2) \
-                * np.sin(det_info["theta"].values[0]) \
+            y = 2 * np.sin(self.det_info["r"].values[0] / 2) \
+                * np.sin(self.det_info["theta"].values[0]) \
                 * 180.0 / np.pi
             if extendedopt == "main":
                 extended[1:3] = [0, 0]
@@ -452,33 +509,19 @@ class GenModelMap:
             self.regen_model(mainA=mainA, mainB=mainB,
                              extended=extended, cmb_file=cmb_file, T=T)
 
-        # From data, output the on-sky pointing of the detector
-        tod_pointing = beam_pointing_model(tod, det_info, mntstr)
+        mapind = self.maps.iloc[self.ipix]
 
-        ipix = hp.pixelfunc.ang2pix(self.nside,
-                                    tod_pointing["app_ra_0"].values,
-                                    tod_pointing["app_dec_0"].values,
-                                    lonlat=True)
-
-        mapind = self.maps.iloc[ipix]
-
-        tod_pointing["simdata"] = (
+        self.tod_pointing["simdata"] = (
             mapind["convmapT"].values
             + mapind["convmapQ"].values
-            * np.cos(2 * np.deg2rad(tod_pointing["pa_0"].values))
+            * np.cos(2 * np.deg2rad(self.tod_pointing["pa_0"].values))
             + mapind["convmapU"].values
-            * np.sin(2 * np.deg2rad(tod_pointing["pa_0"].values))) \
-            * det_info["ukpervolt"].values[0] * 1e6
+            * np.sin(2 * np.deg2rad(self.tod_pointing["pa_0"].values)))\
+            / self.det_info["ukpervolt"].values[0] * 1e6
 
-        if showplot:
-            Z = np.zeros(hp.nside2npix(self.nside))
-            Z[ipix] = 300
-            hp.mollview(self.maps["convmapT"].values + Z, coord="C", norm="hist")
-            hp.graticule()
+        return self.tod_pointing
 
-        return tod_pointing
-
-    def plot(self, mapstr=None, coord="C", norm="hist", **kwargs):
+    def mapplot(self, mapstr=None, coord="C", norm="hist", **kwargs):
         """
 
         Plots a molliweide projection of a map using healpy.mollview
@@ -495,24 +538,26 @@ class GenModelMap:
 
         """
 
-        if isinstance(mapstr,type(None)):
+        if isnone(mapstr):
             print("Here's the available keys:")
             print(list(self.maps.keys()))
         elif mapstr == 'all':
             [hp.mollview(self.maps[ms].values, title=ms, coord=coord,
-                         norm=norm, **kwargs) for ms in self.maps.keys()]
+                         norm=norm, **kwargs) for ms in
+             self.maps.keys()]
         else:
             try:
                 hp.mollview(self.maps[mapstr], title=mapstr,
                             coord=coord, norm=norm, **kwargs)
+                hp.graticule()
             except KeyError:
                 print("The map ''" + mapstr + "'' does not exist!")
                 print("Here's the available keys:")
                 print(list(self.maps.keys()))
                 return 0
-        hp.graticule()
 
-    def check_change(self, mainA=None, mainB=None, extended=None, cmb_file=None, T=None):
+    def check_change(self, mainA=None, mainB=None, extended=None,
+                     cmb_file=None, T=None):
         """
 
         Checks to see if any parameters have changed from the last
@@ -539,20 +584,20 @@ class GenModelMap:
         checkchange = []
 
         # Check the beammap values
-        if not isinstance(mainA, type(None)):
+        if not isnone(mainA):
             checkchange.append((self.main_beam_params_A != mainA))
 
-        if not isinstance(mainB, type(None)):
+        if not isnone(mainB):
             checkchange.append((self.main_beam_params_B != mainB))
 
-        if not isinstance(extended, type(None)):
+        if not isnone(extended):
             checkchange.append((self.ext_beam_params != extended))
         # Check the CMB map file
-        if not isinstance(cmb_file, type(None)):
+        if not isnone(cmb_file):
             checkchange.append((self.cmb_file != cmb_file))
 
         # check the ground template
-        if not isinstance(T, type(None)):
+        if not isnone(T):
             checkchange.append((self.T != T))
 
         return any(checkchange)
