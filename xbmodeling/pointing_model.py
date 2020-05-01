@@ -5,11 +5,9 @@ from xbmodeling.config import mountconf
 import pandas as pd
 from xbmodeling.azel2radec import azel2radec
 
-'''
-Note: A lot of this code is based-on or directly copied from some of my previous
-work on raytracing.
-source: https://github.com/jacornelison/shielding-raytracer
-'''
+'''Note: A lot of this code is based-on or directly copied from some 
+of my previous work on raytracing. source: 
+https://github.com/jacornelison/shielding-raytracer '''
 
 
 def extract(cond, x):
@@ -20,6 +18,13 @@ def extract(cond, x):
 
 
 class vec3():
+    """
+    Class representing 3-vectors for easier manipulation in the
+    pointing model code. In addition to normal vector operations,
+    this class has the notable ability to perform arbitrary vector
+    rotations.
+
+    """
     def __init__(self, x, y, z):
         (self.x, self.y, self.z) = (x, y, z)
 
@@ -85,31 +90,53 @@ ORG = vec3(0., 0., 0.)  # Origin
 
 
 def beam_pointing_model(tod, det_info, mntstr="keck"):
-    mnt = mountconf[mntstr]
+    """
 
+    Parameters
+    ----------
+    tod : Pandas DataFrame
+            Real detector timestreams with telescope pointing
+            information
+    det_info : Pandas DataFrame
+            Detector information
+    mntstr : str, optional
+            Mount information to be retrieved from the config file
+
+    Returns
+    -------
+    tod : Pandas DataFrame
+        input tod DataFrame, but with additional apparent az/el and
+        parallactic angle columns.
+    """
+    mnt = mountconf[mntstr]
     app_celest_pointing = pd.DataFrame(index=tod.index)
     for detind in range(len(det_info.index)):
         # Start at the origin of a cartesian coordinate system
         # pos = origin, direction = Zhat, orientation = Xhat
         # and rotate/offset vectors as necessary to reflect
         # telescope boresight pointing and aperture position
-        mountpos, mountdir, mountort = mount_transform(ORG, Z, X, tod, det_info.iloc[detind], mnt)
+        mountpos, mountdir, mountort = __mount_transform(ORG, Z, X,
+                                                        tod, det_info.iloc[detind], mnt)
 
         # Do an additional rotation to reflect the detector pointing
-        detdir, detpol, detort, detort2 = detector_transform(mountdir, mountort, det_info.iloc[detind])
+        detdir, detpol, detort, detort2 = __detector_transform(
+            mountdir, mountort, det_info.iloc[detind])
 
         # Get the apparent azimuth, elevation, and parallactic angle:
-        app_topocoords = get_apparent_topocoords(detdir, detpol, detind)
+        app_topocoords = __get_apparent_topocoords(detdir, detpol,
+                                                  detind)
 
         # Get apparent RA/DEC
         app_celest_pointing = pd.concat(
-            [app_celest_pointing, get_apparent_celestcoords(tod, app_topocoords, mnt, detind)],
+            [app_celest_pointing, __get_apparent_celestcoords(tod,
+                                                             app_topocoords, mnt, detind)],
             axis=1)
 
     return pd.concat([tod, app_celest_pointing], axis=1)
 
 
-def get_apparent_celestcoords(tod, app_topocoords, mnt, detind):
+def __get_apparent_celestcoords(tod, app_topocoords, mnt, detind):
+    # Convert apparent az/el to ra/dec.
     ra, dec = azel2radec(tod["time_utc"] + 2400000.5,
                          np.deg2rad(app_topocoords["az_app"]),
                          np.deg2rad(app_topocoords["el_app"]),
@@ -122,7 +149,7 @@ def get_apparent_celestcoords(tod, app_topocoords, mnt, detind):
     }, index=tod.index)
 
 
-def get_apparent_topocoords(detdir, detpol, detind):
+def __get_apparent_topocoords(detdir, detpol, detind):
     # Calculate the parallactic angle of the the detector polarization
     # with respect to zenith
     ea = Z.cross(detdir).norm()
@@ -135,7 +162,9 @@ def get_apparent_topocoords(detdir, detpol, detind):
     })
 
 
-def mount_transform(pos, dir, ort, tod, det_info, mnt):
+def __mount_transform(pos, dir, ort, tod, det_info, mnt):
+    # Get the physical location, pointing and orientation of an
+    # experiment represented by 3 3-vectors.
     outpos = pos + vec3(mnt["aptoffr"], 0., 0.)
     outpos = outpos.rotate(Z, tod['tel_hor_dk'] + det_info["drumangle"] - 90)
     outpos = outpos + vec3(0., 0., mnt["aptoffz"])
@@ -153,26 +182,28 @@ def mount_transform(pos, dir, ort, tod, det_info, mnt):
     return outpos, outdir, outort
 
 
-def detector_transform(indir, inort, det_info):
+def __detector_transform(indir, inort, det_info):
     # Parallel transport the pointing and orientation vectors in
     # the direction of the detector pointing WRT the boresight.
     inort2 = indir.cross(inort)
 
     outdir, outort, outort2 = [
-        euler_rotate(obj, -det_info["theta"], -det_info["r"], det_info["theta"], inort, inort2, indir)
+    __euler_rotate(obj, -det_info["theta"], -det_info["r"],
+                   det_info["theta"], inort, inort2, indir)
         for obj in [indir, inort, inort2]]
 
-    # Rotate the detector orientation to the polarization response orientation.
-    # This is important if we're dealing with polarization angles
-    # outort = outort.rotate(outdir,pol)
-    #outpol = outort * np.cos(np.radians(det_info["phi"])) - outort2 * np.sin(np.radians(det_info["phi"]))
+    # Rotate the detector orientation to the polarization response
+    # orientation. This is important if we're dealing with
+    # polarization angles outort = outort.rotate(outdir,pol) outpol =
+    # outort * np.cos(np.radians(det_info["phi"])) - outort2 *
+    # np.sin(np.radians(det_info["phi"]))
     outpol = outort
 
     return outdir, outpol, outort, outort2
 
 
 # Euler Rotation Matrix
-def euler_rotate(V, a, b, g, e1=X, e2=Y, e3=Z):
+def __euler_rotate(V, a, b, g, e1=X, e2=Y, e3=Z):
     V = V.rotate(e3, g)
     XP = e1.rotate(e3, g)
     YP = e2.rotate(e3, g)
