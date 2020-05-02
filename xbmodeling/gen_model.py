@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import healpy as hp
 import numpy as np
 import pandas as pd
+import emcee
 
 # Local dependencies
 from xbmodeling.config import modelconf
@@ -172,6 +173,19 @@ class GenModelMap:
             self.maps = convolve_maps(self.maps, doconv=False)
 
         self.maplist = list(self.maps.keys())
+        
+        # Set default bounds on the uniform priors
+        main_peak = (0, 2)
+        main_center = (-7, 7)
+        main_width = (0, 2)
+        main_corr = (-1, 1)
+        ext_peak = (0, 2)
+        ext_center = (-30, 30)
+        ext_width = (0, 50)
+        ext_corr = (-1, 1)
+        self.param_bounds = (main_peak, main_center, main_center, main_width, main_width, main_corr,
+                             main_peak, main_center, main_center, main_width, main_width, main_corr,
+                             ext_peak, ext_center, ext_center, ext_width, ext_width, ext_corr)
 
     def regen_model(self, mainA=None, mainB=None, extended=None, cmb_file=None, T=None):
         '''
@@ -307,3 +321,166 @@ class GenModelMap:
             checkchange.append((self.T != T))
 
         return any(checkchange)
+
+    def log_prior(self, theta, bounds=None):
+        """
+        Returns natural log of prior distribution.  All params have uniform priors.
+
+        :theta: tuple of 18 floats 
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        :return log_prior_value: float
+
+        """
+        if bounds is None:
+            bounds = self.param_bounds
+            
+        # If within the param bounds, return 0.  Otherwise -inf
+        inside_bounds = all([bounds[0] < param < bounds[1] for param, bounds in zip(theta,self.param_bounds)])
+
+        if inside_bounds:
+            return 0.0
+        else:
+            return -np.inf
+        
+    def log_likelihood(self, theta, tod, det_info, sigma):
+        """
+        Returns natural log of likelihood distribution.
+
+        :theta: tuple of 18 floats 
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        :tod: pandas dataframe
+            Contains real observed values of polarization timestreams (field 'realdata')
+            Also contains telescope motion and detector info 
+        :det_info: pandas dataframe
+            Contains detector pointing information.
+        :sigma: single float, or array of floats w/ same length as tod['realdata']
+            Estimate of uncertainty in real data.
+        :return log_likelihood_value: float
+
+        """
+        
+        observed = tod['realdata'].values
+        
+        # Now run the model with the given beam params to get simulated data
+        mainA = theta[0:6]
+        mainB = theta[6:12]
+        extended = theta[12:18]
+        tod = self.observe(tod, det_info,
+                           mainA = mainA,
+                           mainB = mainB,
+                           extended = extended)
+        predicted = tod['simdata'].values
+        
+        residual = (observed - predicted)**2/sigma**2
+        prefactor = 1/np.sqrt(2 * np.pi * sigma**2)
+        log_likelihood = np.sum( np.log(prefactor * np.exp(-residual/2)) )
+        
+        return log_likelihood
+    
+    def log_posterior(self, theta, tod, det_info):
+        """
+        Returns natural log of posterior distribution (prior * likelihood).
+
+        :theta: tuple of 18 floats 
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        :tod: pandas dataframe
+            Contains real observed values of polarization timestreams (field 'realdata')
+            Also contains telescope motion and detector info 
+        :det_info: pandas dataframe
+            Contains detector pointing information.
+        :return log_posterior_value: float
+
+        """
+        
+        log_prior_value = self.log_prior(theta)
+        log_likelihood_value = self.log_likelihood(theta, tod, det_info)
+        
+        log_posterior_value = log_prior_value + log_likelihood_value
+        
+        return log_posterior_value
+    
+    def initialize_walkers(self, initial_guess, gaussian_ball_width, N_walkers, seed=None):
+        """
+        Returns starting positions of walkers for emcee.
+        
+        :initial_guess: tuple or array
+            initial guesses corresponsing to each parameter in model
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        :gaussian_ball_width: float
+            Width of Gaussian ball determining walker starting position
+        :N_walkers: int
+            Number of walkers to be used in emcee
+        :seed: int between 0 and 2**32-1
+            For initializing pseudo-random number generator.  Only use for debugging.
+        :return  starting_positions: N_walkers x N_params size array of floats
+
+        """
+        # Initialize the RNG.  If None, won't do anything
+        np.random.seed(seed)
+        # Starting positions are randomly distributed Gaussian ball around initial positions
+        N_dim = len(initial_guess)
+        gaussian_ball = gaussian_ball_width * np.random.randn(N_walkers, N_dim)
+        starting_positions = (1 + gaussian_ball) * initial_guess
+        
+        return starting_positions
+    
+    def do_emcee_fit(self, 
+                     tod, 
+                     det_info, 
+                     N_walkers,
+                     N_steps,
+                     initial_guess, 
+                     gaussian_ball_width, 
+                     seed = None, 
+                     sigma = 1):
+        """
+        Do the model fit using emcee.
+        :tod: pandas dataframe
+            Contains real observed values of polarization timestreams (field 'realdata')
+            Also contains telescope motion and detector info 
+        :det_info: pandas dataframe
+            Contains detector pointing information.
+        :N_walkers: int
+            Number of walkers to be used in emcee
+        :N_steps: int
+            Number of steps for each walker to take.
+        :initial_guess: tuple or array
+            initial guesses corresponsing to each parameter in model
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        :gaussian_ball_width: float
+            Width of Gaussian ball determining walker starting position
+        :seed: int between 0 and 2**32-1
+            For initializing pseudo-random number generator.  Only use for debugging.  Default None.
+        :sigma: single float, or array of floats w/ same length as tod['realdata']
+            Estimate of uncertainty in real data.  Default 1.
+        
+        :return fit_df: pandas dataframe
+            contains traces for all parameters of model
+
+        """
+        # Walker starting positions
+        starting_positions = self.initialize_walkers(initial_guess, gaussian_ball_width, N_walkers, seed)
+        
+        # Setup and run the sampler
+        sampler = emcee.EnsembleSampler
+        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=(tod, det_info))
+        sampler.run_mcmc(starting_positions, N_steps)
+        
+        fit_df = pd.DataFrame(np.vstack(sampler.chain))
+        fit_df.index = pd.MultiIndex.from_product([range(nwalkers), range(nsteps)], 
+                                                  names=['walker', 'step'])
+        fit_df.columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                          'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                          'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
+        
+        return fit_df
