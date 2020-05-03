@@ -3,15 +3,13 @@
 # shop so we don't have to make a bunch of changes
 # in the code if we want to change these values
 
-# import io
-
 # Values for the generative model
 modelconf = {
     "cmbFile": "xbmodeling/inputmaps/commanderR300_full_IQU_NSIDE_512.fits",  # Default CMB map
     "groundTemperature": 300,  # Default ground temperature
     "beamParams": [1, 0, 30, 30, 30, 1],
     "extendedBeam": [0.25, 120, 120, 60, 60, 0],
-    "extendedOption": "main",
+    "extendedOption": "custom",
     "defaultResolution": 128,
     "defaultData": "xbmodeling/input_data/bicepkeck_tods/20150531C01_dk068_tod_singlepair.mat",
 }
