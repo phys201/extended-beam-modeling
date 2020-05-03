@@ -381,7 +381,7 @@ class GenModelMap:
         
         return log_likelihood
     
-    def log_posterior(self, theta, tod, det_info):
+    def log_posterior(self, theta, tod, det_info, sigma):
         """
         Returns natural log of posterior distribution (prior * likelihood).
 
@@ -399,7 +399,7 @@ class GenModelMap:
         """
         
         log_prior_value = self.log_prior(theta)
-        log_likelihood_value = self.log_likelihood(theta, tod, det_info)
+        log_likelihood_value = self.log_likelihood(theta, tod, det_info, sigma)
         
         log_posterior_value = log_prior_value + log_likelihood_value
         
@@ -473,7 +473,7 @@ class GenModelMap:
         
         # Setup and run the sampler
         sampler = emcee.EnsembleSampler
-        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=(tod, det_info))
+        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=(tod, det_info, sigma))
         sampler.run_mcmc(starting_positions, N_steps)
         
         fit_df = pd.DataFrame(np.vstack(sampler.chain))
