@@ -615,7 +615,7 @@ class GenModelMap:
         # check the ground template
         if not isnone(T):
             checkchange.append((self.T != T))
-
+        
         return any(checkchange)
 
     def log_prior(self, theta, bounds=None):
@@ -640,7 +640,7 @@ class GenModelMap:
         else:
             return -np.inf
         
-    def log_likelihood(self, theta, tod, det_info, sigma):
+    def log_likelihood(self, theta, sigma):
         """
         Returns natural log of likelihood distribution.
 
@@ -648,28 +648,24 @@ class GenModelMap:
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
-        :tod: pandas dataframe
-            Contains real observed values of polarization timestreams (field 'realdata')
-            Also contains telescope motion and detector info 
-        :det_info: pandas dataframe
-            Contains detector pointing information.
         :sigma: single float, or array of floats w/ same length as tod['realdata']
             Estimate of uncertainty in real data.
+            
         :return log_likelihood_value: float
 
         """
         
-        observed = tod['realdata'].values
+        observed = self.tod_pointing['realdata'].values
         
         # Now run the model with the given beam params to get simulated data
         mainA = theta[0:6]
         mainB = theta[6:12]
         extended = theta[12:18]
-        tod = self.observe(tod, det_info,
-                           mainA = mainA,
+        
+        tod = self.observe(mainA = mainA,
                            mainB = mainB,
                            extended = extended)
-        predicted = tod['simdata'].values
+        predicted = self.tod_pointing['simdata'].values
         
         residual = (observed - predicted)**2/sigma**2
         prefactor = 1/np.sqrt(2 * np.pi * sigma**2)
@@ -677,7 +673,7 @@ class GenModelMap:
         
         return log_likelihood
     
-    def log_posterior(self, theta, tod, det_info, sigma):
+    def log_posterior(self, theta, sigma):
         """
         Returns natural log of posterior distribution (prior * likelihood).
 
@@ -685,17 +681,15 @@ class GenModelMap:
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
-        :tod: pandas dataframe
-            Contains real observed values of polarization timestreams (field 'realdata')
-            Also contains telescope motion and detector info 
-        :det_info: pandas dataframe
-            Contains detector pointing information.
+
         :return log_posterior_value: float
 
         """
-        
+        if type(theta) is np.ndarray:
+            theta = theta.tolist()
+            
         log_prior_value = self.log_prior(theta)
-        log_likelihood_value = self.log_likelihood(theta, tod, det_info, sigma)
+        log_likelihood_value = self.log_likelihood(theta, sigma)
         
         log_posterior_value = log_prior_value + log_likelihood_value
         
@@ -716,6 +710,7 @@ class GenModelMap:
             Number of walkers to be used in emcee
         :seed: int between 0 and 2**32-1
             For initializing pseudo-random number generator.  Only use for debugging.
+            
         :return  starting_positions: N_walkers x N_params size array of floats
 
         """
@@ -728,22 +723,15 @@ class GenModelMap:
         
         return starting_positions
     
-    def do_emcee_fit(self, 
-                     tod, 
-                     det_info, 
+    def do_emcee_fit(self,  
                      N_walkers,
                      N_steps,
                      initial_guess, 
                      gaussian_ball_width, 
                      seed = None, 
-                     sigma = 1):
+                     sigma = 1.0):
         """
         Do the model fit using emcee.
-        :tod: pandas dataframe
-            Contains real observed values of polarization timestreams (field 'realdata')
-            Also contains telescope motion and detector info 
-        :det_info: pandas dataframe
-            Contains detector pointing information.
         :N_walkers: int
             Number of walkers to be used in emcee
         :N_steps: int
@@ -769,11 +757,11 @@ class GenModelMap:
         
         # Setup and run the sampler
         sampler = emcee.EnsembleSampler
-        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=(tod, det_info, sigma))
+        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=[sigma])
         sampler.run_mcmc(starting_positions, N_steps)
         
         fit_df = pd.DataFrame(np.vstack(sampler.chain))
-        fit_df.index = pd.MultiIndex.from_product([range(nwalkers), range(nsteps)], 
+        fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
                                                   names=['walker', 'step'])
         fit_df.columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
                           'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
