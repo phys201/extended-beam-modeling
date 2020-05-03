@@ -760,11 +760,11 @@ class GenModelMap:
         sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=[sigma])
         sampler.run_mcmc(starting_positions, N_steps)
         
-        fit_df = pd.DataFrame(np.vstack(sampler.chain))
-        fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
+        self.fit_df = pd.DataFrame(np.vstack(sampler.chain))
+        self.fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
                                                   names=['walker', 'step'])
-        fit_df.columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+        self.fit_df.columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
                           'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
                           'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
         
-        return fit_df
+        return self.fit_df
