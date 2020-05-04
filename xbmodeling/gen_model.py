@@ -190,10 +190,15 @@ def convolve_maps(maps, doconv=True):
         Returns maps data with extra "convmap[T,Q,U]" maps.
     """
 
+    # Get pairsum and pairdiff beams, find and normalize their window functions
     pairsum = (maps["beammapA"] + maps["beammapB"]).values
     pairsum /= np.sum(pairsum)
+    pairsum_windowfunc = hp.anafast(pairsum)
+    pairsum_windowfunc /= pairsum_windowfunc[0]
     pairdiff = (maps["beammapA"] + maps["beammapB"]).values
     pairdiff /= np.sum(pairdiff)
+    pairdiff_windowfunc = hp.anafast(pairdiff)
+    pairdiff_windowfunc /= pairdiff_windowfunc[0]
 
     # Suppress healpy output
     with suppress_stdout():
@@ -201,18 +206,18 @@ def convolve_maps(maps, doconv=True):
             # Temperature map has both CMB and ground
             maps["convmapT"] = hp.smoothing(
                 (maps["cmbmapT"] + maps["groundmap"]).values,
-                beam_window=hp.anafast(pairdiff)
+                beam_window=pairdiff_windowfunc
             )
 
             # Polarization maps only have CMB
             maps["convmapQ"] = hp.smoothing(
                 maps["cmbmapQ"].values,
-                beam_window=hp.anafast(pairsum)
+                beam_window=pairsum_windowfunc
             )
 
             maps["convmapU"] = hp.smoothing(
                 maps["cmbmapU"].values,
-                beam_window=hp.anafast(pairsum)
+                beam_window=pairsum_windowfunc
             )
 
         else:
