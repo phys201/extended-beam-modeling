@@ -846,4 +846,58 @@ class GenModelMap:
         
         return
     
+    def make_1d_posterior_plots(self):
+        """
+        Generate a simple model and use as input to observe().  The evaluate the 
+        posterior using the true known input beam model parameters, but explore
+        the 1D posterior for one parameter at a time, slightly changing that parameter's
+        value each iteration.  Make a plot of the explored 1D posterior for each model
+        parameter.  This is for debugging, everything is hard-coded.
+        
+        Returns:
+        test_posteriors_1d: 18 x 100 array of posteriors
+
+        """
+        # True beam A model
+        a = [1, 0, 0, 1, 1, 0]
+        # True beam B model
+        b = [1, 1, 0, 1, 1, 0]
+        # True ext beam model
+        c = [0.5, 6, 0, 30, 30, 0]
+        extendedopt = 'main'
+        
+        columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                   'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                   'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
+        
+        self.observe(mainA=a, mainB=b, extended=c, extendedopt=extendedopt)
+        self.tod_pointing['inputdata'] = self.tod_pointing['simdata']
+        
+        N_evals_per_param = 100
+        N_params = len(columns)
+        test_posteriors_1d = np.zeros((N_params, N_evals_per_param))
+        
+        # Evaluate all the 1D posteriors
+        for ii in range(N_params):
+            test_params = a + b + c
+            this_param_range = np.linspace(self.param_bounds[ii][0], self.param_bounds[ii][1], N_evals_per_param)
+            for jj in range(N_evals_per_param):
+                test_params[ii] = this_param_range[jj]
+                test_posteriors_1d[ii,jj] = self.log_posterior(test_params, 1, extendedopt)
+        
+        test_params = a + b + c
+        
+        # Plot all the 1D posteriors
+        fig, axes = plt.subplots(6, 3, figsize=(20,35))
+        axes_to_plot = axes.T.ravel()[0:N_params]
+        for ii in range(len(axes_to_plot)):
+            ax = axes_to_plot[ii]
+            ax.set(ylabel=columns[ii])
+            this_param_range = np.linspace(self.param_bounds[ii][0], self.param_bounds[ii][1], N_evals_per_param)
+            ax.plot(this_param_range, test_posteriors_1d[ii])
+            ax.axvline(x=test_params[ii], color='r')
+
+        self.test_posteriors_1d = test_posteriors_1d
+
+        return self.test_posteriors_1d
     
