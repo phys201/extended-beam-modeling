@@ -859,11 +859,11 @@ class GenModelMap:
 
         """
         # True beam A model
-        a = [1, 0, 0, 1, 1, 0]
+        a = [1.2, 0, 0, 1.1, 1, -0.25]
         # True beam B model
-        b = [1, 1, 0, 1, 1, 0]
+        b = [0.8, 1, 0, 1.5, 1, 0.5]
         # True ext beam model
-        c = [0.5, 6, 0, 30, 30, 0]
+        c = [0.25, 6, 0, 30, 30, 0]
         extendedopt = 'main'
         
         columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
@@ -896,6 +896,8 @@ class GenModelMap:
             this_param_range = np.linspace(self.param_bounds[ii][0], self.param_bounds[ii][1], N_evals_per_param)
             ax.plot(this_param_range, test_posteriors_1d[ii])
             ax.axvline(x=test_params[ii], color='r')
+        plt.subplots_adjust(wspace=0.3, hspace=0.5)
+        
 
         self.test_posteriors_1d = test_posteriors_1d
 
