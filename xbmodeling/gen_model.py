@@ -7,6 +7,8 @@ import healpy as hp
 import numpy as np
 import pandas as pd
 import emcee
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Local dependencies
 from xbmodeling.config import modelconf
@@ -627,7 +629,7 @@ class GenModelMap:
         """
         Returns natural log of prior distribution.  All params have uniform priors.
 
-        :theta: tuple of 18 floats 
+        :theta: list of 18 floats 
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
@@ -645,57 +647,71 @@ class GenModelMap:
         else:
             return -np.inf
         
-    def log_likelihood(self, theta, sigma):
+    def log_likelihood(self, theta, sigma, extendedopt):
         """
         Returns natural log of likelihood distribution.
 
-        :theta: tuple of 18 floats 
+        Inputs:
+        theta: list of 18 floats 
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
-        :sigma: single float, or array of floats w/ same length as tod['realdata']
+        sigma: single float, or array of floats w/ same length as tod['inputdata']
             Estimate of uncertainty in real data.
+        extendedopt: str, {"main", "buddy", "boresight", "custom"}
+            Determines where our extended be would be located.  
+
             
         :return log_likelihood_value: float
 
         """
         
-        observed = self.tod_pointing['realdata'].values
+        observed = self.tod_pointing['inputdata'].values
         
-        # Now run the model with the given beam params to get simulated data
         mainA = theta[0:6]
         mainB = theta[6:12]
         extended = theta[12:18]
-        
+            
+        # Now run the model with the given beam params to get simulated data
         tod = self.observe(mainA = mainA,
                            mainB = mainB,
-                           extended = extended)
-        predicted = self.tod_pointing['simdata'].values
+                           extended = extended,
+                           extendedopt = extendedopt)
+        predicted = tod['simdata'].values
         
         residual = (observed - predicted)**2/sigma**2
-        prefactor = 1/np.sqrt(2 * np.pi * sigma**2)
-        log_likelihood = np.sum( np.log(prefactor * np.exp(-residual/2)) )
+        chi_square = np.sum(residual**2 / sigma**2)
+        prefactor = np.sum(np.log(1/np.sqrt(2.0 * np.pi * sigma**2)))
+        log_likelihood = prefactor - 0.5 * chi_square
         
         return log_likelihood
     
-    def log_posterior(self, theta, sigma):
+    def log_posterior(self, theta, sigma, extendedopt):
         """
         Returns natural log of posterior distribution (prior * likelihood).
 
-        :theta: tuple of 18 floats 
+        Inputs:
+        theta: list or array of floats 
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
+        sigma: single float, or array of floats w/ same length as tod['inputdata']
+        extendedopt: str, {"main", "buddy", "boresight", "custom"}
+            Determines where our extended be would be located.  
 
-        :return log_posterior_value: float
+        Returns:
+        log_posterior_value: float
 
         """
         if type(theta) is np.ndarray:
             theta = theta.tolist()
             
         log_prior_value = self.log_prior(theta)
-        log_likelihood_value = self.log_likelihood(theta, sigma)
+        # Don't waste time with likelihood if prior is -inf
+        if log_prior_value == -np.inf:
+            return -np.inf
         
+        log_likelihood_value = self.log_likelihood(theta, sigma, extendedopt)
         log_posterior_value = log_prior_value + log_likelihood_value
         
         return log_posterior_value
@@ -732,44 +748,158 @@ class GenModelMap:
                      N_walkers,
                      N_steps,
                      initial_guess, 
-                     gaussian_ball_width, 
+                     gaussian_ball_width,
+                     extendedopt = modelconf["extendedOption"],
                      seed = None, 
                      sigma = 1.0):
         """
         Do the model fit using emcee.
-        :N_walkers: int
+        
+        Input:
+        N_walkers: int
             Number of walkers to be used in emcee
-        :N_steps: int
+        N_steps: int
             Number of steps for each walker to take.
-        :initial_guess: tuple or array
+        initial_guess: list
             initial guesses corresponsing to each parameter in model
             First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
             Second 6 are the same parameters for main beam B
             Third 6 are the same parameters for the extended beam
-        :gaussian_ball_width: float
+        gaussian_ball_width: float
             Width of Gaussian ball determining walker starting position
-        :seed: int between 0 and 2**32-1
-            For initializing pseudo-random number generator.  Only use for debugging.  Default None.
-        :sigma: single float, or array of floats w/ same length as tod['realdata']
-            Estimate of uncertainty in real data.  Default 1.
-        
-        :return fit_df: pandas dataframe
+        extendedopt: str, {"main", "buddy", "boresight", "custom"}
+            Optional. Determines where our extended be would be
+            located.  If "custom", emcee will include x/y_center parameters for
+            extended beam in model. If not, those two parameters ignored.
+        seed: int between 0 and 2**32-1
+            Optional.  For initializing pseudo-random number generator.  
+            Only use for debugging.  Default None.
+        sigma: single float, or array of floats w/ same length as tod['inputdata']
+            Optional. Estimate of uncertainty in real data.  Default 1.
+
+        Returns:    
+        fit_df: pandas dataframe
             contains traces for all parameters of model
 
         """
-        # Walker starting positions
-        starting_positions = self.initialize_walkers(initial_guess, gaussian_ball_width, N_walkers, seed)
+        # Names of parameters to use for output struct
+        columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                   'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                   'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
         
-        # Setup and run the sampler
+        # Funny stuff happens if an initialy guess is exactly zero -- add a perturbation
+        guess = np.array(initial_guess) + 1e-2
+        guess = guess.tolist()
+        
+        # Setup walkers.  Trim away extended beam x/y_center params if extendedopt is fixed
         sampler = emcee.EnsembleSampler
-        sampler = sampler(N_walkers, len(initial_guess), self.log_posterior, args=[sigma])
+        if extendedopt != "custom":
+            del guess[13:15]
+            del columns[13:15]
+            # Use lambda to avoid emcee iterating over two variables that are ignored anyway
+            func = lambda x,a,b: self.log_posterior(np.insert(x,13,[0,0]),a,b)
+        else:
+            func = self.log_posterior
+        starting_positions = self.initialize_walkers(guess, gaussian_ball_width, N_walkers, seed)
+            
+        sampler = sampler(N_walkers, len(guess), func, args=[sigma,extendedopt])
         sampler.run_mcmc(starting_positions, N_steps)
-        
         self.fit_df = pd.DataFrame(np.vstack(sampler.chain))
         self.fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
                                                   names=['walker', 'step'])
-        self.fit_df.columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
-                          'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
-                          'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
+        self.fit_df.columns = columns
         
         return self.fit_df
+
+    def plot_emcee_chains(self, nchains=50):
+        """
+        Plots traces for all samples dataframe output from do_emcee_fit.
+    
+        Input: 
+        nchains : integer, number of walkers to plot
+       
+        """
+        N_plots = len(self.fit_df.keys())
+        fig, axes = plt.subplots(6, 3, figsize=(25,15))
+        axes_to_plot = axes.T.ravel()[0:N_plots]
+        for ax, name in zip(axes_to_plot, self.fit_df.keys()):
+            ax.set(ylabel=name)
+        for i in range(nchains):
+            for ax, name in zip(axes_to_plot, self.fit_df.keys()):
+                sns.lineplot(data=self.fit_df.loc[i], x=self.fit_df.loc[i].index, y=name, ax=ax)
+                
+        return
+    
+    def joint_plot(self, param1, param2):
+        """
+        Make a joint plot between two parameters using seaborn.
+        
+        Input:
+            param1: string
+            param2: string
+                Choices for params are 
+                'mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr'
+        """
+        joint_kde = sns.jointplot(x=param1, y=param2, data=self.fit_df, kind='kde')
+        
+        return
+    
+    def make_1d_posterior_plots(self):
+        """
+        Generate a simple model and use as input to observe().  The evaluate the 
+        posterior using the true known input beam model parameters, but explore
+        the 1D posterior for one parameter at a time, slightly changing that parameter's
+        value each iteration.  Make a plot of the explored 1D posterior for each model
+        parameter.  This is for debugging, everything is hard-coded.
+        
+        Returns:
+        test_posteriors_1d: 18 x 100 array of posteriors
+
+        """
+        # True beam A model
+        a = [1.2, 0, 0, 1.1, 1, -0.25]
+        # True beam B model
+        b = [0.8, 1, 0, 1.5, 1, 0.5]
+        # True ext beam model
+        c = [0.25, 6, 0, 30, 30, 0]
+        extendedopt = 'main'
+        
+        columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                   'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                   'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
+        
+        self.observe(mainA=a, mainB=b, extended=c, extendedopt=extendedopt)
+        self.tod_pointing['inputdata'] = self.tod_pointing['simdata']
+        
+        N_evals_per_param = 100
+        N_params = len(columns)
+        test_posteriors_1d = np.zeros((N_params, N_evals_per_param))
+        
+        # Evaluate all the 1D posteriors
+        for ii in range(N_params):
+            test_params = a + b + c
+            this_param_range = np.linspace(self.param_bounds[ii][0], self.param_bounds[ii][1], N_evals_per_param)
+            for jj in range(N_evals_per_param):
+                test_params[ii] = this_param_range[jj]
+                test_posteriors_1d[ii,jj] = self.log_posterior(test_params, 1, extendedopt)
+        
+        test_params = a + b + c
+        
+        # Plot all the 1D posteriors
+        fig, axes = plt.subplots(6, 3, figsize=(20,35))
+        axes_to_plot = axes.T.ravel()[0:N_params]
+        for ii in range(len(axes_to_plot)):
+            ax = axes_to_plot[ii]
+            ax.set(ylabel=columns[ii])
+            this_param_range = np.linspace(self.param_bounds[ii][0], self.param_bounds[ii][1], N_evals_per_param)
+            ax.plot(this_param_range, test_posteriors_1d[ii])
+            ax.axvline(x=test_params[ii], color='r')
+        plt.subplots_adjust(wspace=0.3, hspace=0.5)
+        
+
+        self.test_posteriors_1d = test_posteriors_1d
+
+        return self.test_posteriors_1d
+    
