@@ -802,6 +802,8 @@ class GenModelMap:
         else:
             func = self.log_posterior
         starting_positions = self.initialize_walkers(guess, gaussian_ball_width, N_walkers, seed)
+        ncpu = multiprocessing.cpu_count()
+        print("Starting with {} CPUs".format(ncpu))
             
         with multiprocessing.Pool() as pool:
             sampler = sampler(N_walkers, len(guess), func, args=[sigma,extendedopt], pool=pool)
