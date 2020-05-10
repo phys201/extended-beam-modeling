@@ -7,6 +7,7 @@ import healpy as hp
 import numpy as np
 import pandas as pd
 import emcee
+import multiprocessing
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -801,10 +802,13 @@ class GenModelMap:
         else:
             func = self.log_posterior
         starting_positions = self.initialize_walkers(guess, gaussian_ball_width, N_walkers, seed)
+        ncpu = multiprocessing.cpu_count()
+        print("Starting with {} CPUs".format(ncpu))
             
-        sampler = sampler(N_walkers, len(guess), func, args=[sigma,extendedopt])
-        sampler.run_mcmc(starting_positions, N_steps)
-        self.fit_df = pd.DataFrame(np.vstack(sampler.chain))
+        with multiprocessing.Pool() as pool:
+            sampler = sampler(N_walkers, len(guess), func, args=[sigma,extendedopt], pool=pool)
+            sampler.run_mcmc(starting_positions, N_steps)
+            self.fit_df = pd.DataFrame(np.vstack(sampler.chain))
         self.fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
                                                   names=['walker', 'step'])
         self.fit_df.columns = columns
