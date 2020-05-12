@@ -745,14 +745,58 @@ class GenModelMap:
         
         return starting_positions
     
+    def log_posterior_with_mask(self, theta, sigma, extendedopt, keep_fixed, initial_guess):
+        """
+        Wrapper function that calls log_posterior but with an arbitrary # of 
+        parameters "masked out" of the emcee algorithm.  This function takes in
+        theta (containing parameters that emcee explores) and calls log_posterior
+        with the full 18 parameters.
+        
+        Should not be used standalone -- meant to be called via do_emcee_fit only.
+        
+        Inputs:
+        theta: list or array of floats 
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+        sigma: single float, or array of floats w/ same length as tod['inputdata']
+        extendedopt: str, {"main", "buddy", "boresight", "custom"}
+            Determines where our extended be would be located.  
+        keep_fixed: boolean list, same size as initial_guess
+            For each parameter in initial_guess, a value of 1 will keep the model
+            fixed to the value in initial_guess (emcee won't treat it as a parameter).
+            Value of 0 will treat them all as parameters (except in extendedopt case above).
+        initial_guess: list
+            initial guesses corresponsing to each parameter in model
+            First 6 are amplitude, x_center, y_center, x_width, y_width, correlation for main beam A.
+            Second 6 are the same parameters for main beam B
+            Third 6 are the same parameters for the extended beam
+            
+        Returns:
+            Value of log_posterior evaluated with all 18 parameters.
+        """
+        
+        free_ind = np.array(keep_fixed) == 0
+    
+        theta_full = np.array(initial_guess)
+        theta_full[free_ind] = theta
+        
+        if extendedopt != "custom":
+            theta_full[13:15] = 0
+            
+        return self.log_posterior(theta_full, sigma, extendedopt)
+        
+    
     def do_emcee_fit(self,  
                      N_walkers,
                      N_steps,
                      initial_guess, 
                      gaussian_ball_width,
                      extendedopt = modelconf["extendedOption"],
+                     keep_fixed = None,
                      seed = None, 
-                     sigma = 1.0):
+                     sigma = 1.0,
+                     multicore = True):
         """
         Do the model fit using emcee.
         
@@ -772,41 +816,56 @@ class GenModelMap:
             Optional. Determines where our extended be would be
             located.  If "custom", emcee will include x/y_center parameters for
             extended beam in model. If not, those two parameters ignored.
+        keep_fixed: boolean list, same size as initial_guess
+            For each parameter in initial_guess, a value of 1 will keep the model
+            fixed to the value in initial_guess (emcee won't treat it as a parameter).
+            Value of 0 will treat them all as parameters.
+            Default all 0, except extended_x/y which will be 1 for extendedopt that is not "custom"
         seed: int between 0 and 2**32-1
             Optional.  For initializing pseudo-random number generator.  
             Only use for debugging.  Default None.
         sigma: single float, or array of floats w/ same length as tod['inputdata']
             Optional. Estimate of uncertainty in real data.  Default 1.
+        multicore: boolean
+            If True, will use multiprocessing with emcee to parallelize 
+            Default True
 
         Returns:    
         fit_df: pandas dataframe
-            contains traces for all parameters of model
+            contains traces for all parameters of model (that weren't held fixed) 
 
         """
-        # Names of parameters to use for output struct
-        columns = ['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
-                   'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
-                   'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr']
         
-        # Funny stuff happens if an initialy guess is exactly zero -- add a perturbation
-        guess = np.array(initial_guess) + 1e-2
-        guess = guess.tolist()
+        if keep_fixed is None:
+            keep_fixed = np.zeros(np.shape(initial_guess))
+        if extendedopt != "custom":
+            keep_fixed[13:15] = [1, 1]
+        free_ind = np.array(keep_fixed) == 0
+        
+        # Funny stuff happens if an initialy guess is exactly zero -- add a perturbation to non-fixed params
+        guess = np.array(initial_guess)
+        guess[free_ind] += 1e-2
+        
+        # Names of parameters to use for output struct
+        columns = np.array(['mainA_amp','mainA_x','mainA_y','mainA_sigx','mainA_sigy','mainA_corr',
+                   'mainB_amp','mainB_x','mainB_y','mainB_sigx','mainB_sigy','mainB_corr',
+                   'ext_amp','ext_x','ext_y','ext_sigx','ext_sigy','ext_corr'])
+        columns = columns[free_ind]
         
         # Setup walkers.  Trim away extended beam x/y_center params if extendedopt is fixed
         sampler = emcee.EnsembleSampler
-        if extendedopt != "custom":
-            del guess[13:15]
-            del columns[13:15]
-            # Use lambda to avoid emcee iterating over two variables that are ignored anyway
-            func = lambda x,a,b: self.log_posterior(np.insert(x,13,[0,0]),a,b)
-        else:
-            func = self.log_posterior
-        starting_positions = self.initialize_walkers(guess, gaussian_ball_width, N_walkers, seed)
+
+        starting_positions = self.initialize_walkers(guess[free_ind], gaussian_ball_width, N_walkers, seed)
         ncpu = multiprocessing.cpu_count()
-        print("Starting with {} CPUs".format(ncpu))
-            
+        
+        
         with multiprocessing.Pool() as pool:
-            sampler = sampler(N_walkers, len(guess), func, args=[sigma,extendedopt], pool=pool)
+            if multicore:
+                usepool = pool
+                print("Starting with {} CPUs".format(ncpu))
+            else:
+                usepool = None
+            sampler = sampler(N_walkers, len(guess[free_ind]), self.log_posterior_with_mask, args=[sigma,extendedopt,keep_fixed,guess], pool=usepool)
             sampler.run_mcmc(starting_positions, N_steps)
             self.fit_df = pd.DataFrame(np.vstack(sampler.chain))
         self.fit_df.index = pd.MultiIndex.from_product([range(N_walkers), range(N_steps)], 
@@ -824,8 +883,8 @@ class GenModelMap:
        
         """
         N_plots = len(self.fit_df.keys())
-        fig, axes = plt.subplots(6, 3, figsize=(25,15))
-        axes_to_plot = axes.T.ravel()[0:N_plots]
+        fig, axes = plt.subplots(int(np.ceil(N_plots/2)), 2, figsize=(25,15))
+        axes_to_plot = axes.ravel()[0:N_plots]
         for ax, name in zip(axes_to_plot, self.fit_df.keys()):
             ax.set(ylabel=name)
         for i in range(nchains):
