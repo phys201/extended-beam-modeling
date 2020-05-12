@@ -118,22 +118,26 @@ def make_beam_map(params=None, nside=modelconf["defaultResolution"]):
         return beammap
 
     pixels = np.arange(hp.nside2npix(nside))
-    theta, phi = hp.pixelfunc.pix2ang(nside, pixels)
-    x = 2 * np.sin(theta / 2) * np.cos(phi) * 180.0 / np.pi
-    y = 2 * np.sin(theta / 2) * np.sin(phi) * 180.0 / np.pi
+    lon, lat = hp.pixelfunc.pix2ang(nside, pixels, lonlat=True)
+    x = 2* np.sin(np.deg2rad(lat+90)/2) * np.cos(np.deg2rad(lon)) * \
+        180.0 / np.pi
+    y = 2*np.sin(np.deg2rad(lat+90)/2) * np.sin(np.deg2rad(lon)) * \
+        180.0 / np.pi
 
-    ang = params[5] * np.pi
-    a = np.cos(ang) ** 2 / 2 / params[3] + np.sin(ang) ** 2 / 2 / \
-        params[4]
-    b = np.sin(2 * ang) / 4 * (1 / params[4] - 1 / params[3])
-    c = np.sin(ang) ** 2 / 2 / params[3] + np.cos(ang) ** 2 / 2 / \
-        params[4]
+    # Covariance Matrix
+    S = np.array([[params[3]**2,np.prod(params[3::])],
+                  [np.prod(params[3::]),params[4]**2]])
+
+    Sinv = np.linalg.inv(S)
+
 
     # make a two-dimensional gaussian
-    beammap = params[0] * np.exp(
-        -1 * (a * (x - params[1]) ** 2 + c * (
-                    y - params[2]) ** 2 + 2 * b * (x - params[1]) * (
-                          y - params[2])))
+    beammap = params[0] * np.exp(-0.5 *
+    (Sinv[0,0] * (x - params[1]) ** 2
+     + Sinv[1,1] * (y - params[2]) ** 2
+     + 2 * Sinv[0,1] * (x - params[1]) * (y - params[2])
+     )
+    )
     return beammap
 
 
@@ -163,11 +167,16 @@ def make_composite_map(
 
     # extended beam should be offset relative to the main beam.
     if not isnone([main, extended]):
-        extended[1] += main[1]
-        extended[2] += main[2]
+        ext = list(extended)
+        ext[1] += main[1]
+        ext[2] += main[2]
 
-    bm = make_beam_map(main, nside=nside) \
-         + make_beam_map(extended, nside=nside)
+        bm = make_beam_map(main, nside=nside) \
+             + make_beam_map(ext, nside=nside)
+    else:
+        bm = make_beam_map(main, nside=nside) \
+             + make_beam_map(extended, nside=nside)
+
     return bm / np.max(bm)
 
 
@@ -566,12 +575,12 @@ class GenModelMap:
             print("Here's the available keys:")
             print(list(self.maps.keys()))
         elif mapstr == 'all':
-            [hp.mollview(self.maps[ms].values, title=ms, coord=coord,
+            [hp.orthview(self.maps[ms].values, title=ms, coord=coord,
                          norm=norm, **kwargs) for ms in
              self.maps.keys()]
         else:
             try:
-                hp.mollview(self.maps[mapstr], title=mapstr,
+                hp.orthview(self.maps[mapstr], title=mapstr,
                             coord=coord, norm=norm, **kwargs)
                 hp.graticule()
             except KeyError:
