@@ -118,16 +118,11 @@ def make_beam_map(params=None, nside=modelconf["defaultResolution"]):
         return beammap
 
     pixels = np.arange(hp.nside2npix(nside))
-    theta, phi = hp.pixelfunc.pix2ang(nside, pixels)
-    x = 2 * np.sin(theta / 2) * np.cos(phi) * 180.0 / np.pi
-    y = 2 * np.sin(theta / 2) * np.sin(phi) * 180.0 / np.pi
-
     lon, lat = hp.pixelfunc.pix2ang(nside, pixels, lonlat=True)
     x = 2* np.sin(np.deg2rad(lat+90)/2) * np.cos(np.deg2rad(lon)) * \
         180.0 / np.pi
     y = 2*np.sin(np.deg2rad(lat+90)/2) * np.sin(np.deg2rad(lon)) * \
         180.0 / np.pi
-
 
     # Covariance Matrix
     S = np.array([[params[3]**2,np.prod(params[3::])],
